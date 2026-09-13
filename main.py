@@ -1,330 +1,245 @@
-import os
-import numpy as np
-
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from openai import OpenAI
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 app = FastAPI()
 
-# OpenAI API client
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-# --------------------------------------------------
-# E-COMMERCE SUPPORT DOCUMENT CORPUS
-# --------------------------------------------------
-
+# Knowledge base
 documents = [
-    "Customers can track their order using the tracking ID provided after shipment.",
-    "Orders that have been shipped can be monitored through the delivery tracking page.",
+    "Where is my order?",
+    "How can I track my order?",
+    "I want to know the delivery status of my package.",
+    "When will my order arrive?",
 
-    "Customers can request a return within 7 days if the product meets the return conditions.",
-    "To return an eligible item, open the order details and select the return option.",
-    "Customers who want to send back a purchased product should select the return option in their order details.",
+    "I want to return my product.",
+    "How can I send back an item?",
+    "I received a damaged product and want to return it.",
+    "What is the process for returning a product?",
 
-    "If a payment fails, check your payment method and try again.",
-    "If money is deducted but the order is not placed, the transaction may be reversed automatically.",
+    "My payment failed.",
+    "My payment was unsuccessful.",
+    "I could not complete the payment.",
+    "The transaction failed while placing my order.",
 
-    "Refunds are processed after the returned product is received and verified.",
-    "The refund amount may take several business days to appear in the customer's bank account."
+    "Where is my refund?",
+    "When will I receive my refund?",
+    "My refund has not arrived.",
+    "How can I check my refund status?"
 ]
 
 categories = [
     "Order Tracking",
     "Order Tracking",
+    "Order Tracking",
+    "Order Tracking",
 
     "Product Return",
     "Product Return",
     "Product Return",
+    "Product Return",
 
+    "Payment Failure",
+    "Payment Failure",
     "Payment Failure",
     "Payment Failure",
 
     "Refund Status",
+    "Refund Status",
+    "Refund Status",
     "Refund Status"
 ]
 
-# --------------------------------------------------
-# CREATE EMBEDDINGS
-# --------------------------------------------------
+responses = {
+    "Order Tracking":
+        "You can track your order using the tracking link provided in your order confirmation email.",
 
-def get_embeddings(texts):
-    response = client.embeddings.create(
-        model="text-embedding-3-small",
-        input=texts
-    )
+    "Product Return":
+        "You can request a return from the Orders section. Select the product and choose the Return option.",
 
-    return np.array(
-        [item.embedding for item in response.data],
-        dtype="float32"
-    )
+    "Payment Failure":
+        "Please check your internet connection, payment details, or try another payment method.",
 
-
-# Create document embeddings once
-document_embeddings = get_embeddings(documents)
+    "Refund Status":
+        "Refunds are generally processed after the returned product is verified. Please check your order details for the latest update."
+}
 
 
-# --------------------------------------------------
-# SEMANTIC SEARCH FUNCTION
-# --------------------------------------------------
+# Convert documents into TF-IDF vectors
+vectorizer = TfidfVectorizer(
+    lowercase=True,
+    stop_words="english",
+    ngram_range=(1, 2)
+)
 
-def semantic_search(query, top_k=3):
-
-    query_embedding = get_embeddings([query])[0]
-
-    # Cosine similarity
-    similarities = np.dot(document_embeddings, query_embedding) / (
-        np.linalg.norm(document_embeddings, axis=1)
-        * np.linalg.norm(query_embedding)
-    )
-
-    top_indices = np.argsort(similarities)[::-1][:top_k]
-
-    top_index = top_indices[0]
-
-    return {
-        "category": categories[top_index],
-        "response": documents[top_index],
-        "similarity_score": float(similarities[top_index]),
-        "results": [
-            {
-                "category": categories[i],
-                "document": documents[i],
-                "score": float(similarities[i])
-            }
-            for i in top_indices
-        ]
-    }
+document_vectors = vectorizer.fit_transform(documents)
 
 
-# --------------------------------------------------
-# API REQUEST MODEL
-# --------------------------------------------------
+class ChatRequest(BaseModel):
+    message: str
 
-class QueryRequest(BaseModel):
-    query: str
-
-
-# --------------------------------------------------
-# API ENDPOINT
-# --------------------------------------------------
-
-@app.post("/chat")
-def chat(request: QueryRequest):
-
-    query = request.query.strip()
-
-    if not query:
-        return {
-            "category": "Unknown",
-            "response": "Please enter a customer message."
-        }
-
-    result = semantic_search(query)
-
-    return {
-        "query": query,
-        "category": result["category"],
-        "response": result["response"],
-        "similarity_score": round(result["similarity_score"], 4)
-    }
-
-
-# --------------------------------------------------
-# CHATBOT FRONTEND
-# --------------------------------------------------
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-
     return """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>E-Commerce Support Chatbot</title>
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>E-Commerce Chatbot</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                background: #f2f4f7;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                min-height: 100vh;
+            }
 
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background: #f4f6f9;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            margin: 0;
-        }
+            .chatbox {
+                width: 420px;
+                background: white;
+                padding: 25px;
+                border-radius: 12px;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+            }
 
-        .chat-container {
-            width: 90%;
-            max-width: 600px;
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-            overflow: hidden;
-        }
+            h2 {
+                text-align: center;
+                color: #333;
+            }
 
-        .header {
-            background: #2563eb;
-            color: white;
-            padding: 20px;
-            text-align: center;
-        }
+            #messages {
+                height: 300px;
+                overflow-y: auto;
+                border: 1px solid #ddd;
+                padding: 12px;
+                margin-bottom: 15px;
+            }
 
-        .header h2 {
-            margin: 0;
-        }
+            .user {
+                text-align: right;
+                color: #155724;
+                margin: 10px;
+            }
 
-        .header p {
-            margin-bottom: 0;
-        }
+            .bot {
+                text-align: left;
+                color: #004085;
+                margin: 10px;
+            }
 
-        .chat-box {
-            height: 350px;
-            overflow-y: auto;
-            padding: 20px;
-        }
+            input {
+                width: 70%;
+                padding: 10px;
+                border: 1px solid #ccc;
+                border-radius: 5px;
+            }
 
-        .message {
-            padding: 12px;
-            margin: 10px 0;
-            border-radius: 8px;
-            line-height: 1.5;
-        }
+            button {
+                padding: 10px 15px;
+                background: #007bff;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                cursor: pointer;
+            }
+        </style>
+    </head>
 
-        .user {
-            background: #dbeafe;
-            text-align: right;
-        }
+    <body>
+        <div class="chatbox">
+            <h2>E-Commerce Chatbot</h2>
 
-        .bot {
-            background: #f1f5f9;
-            text-align: left;
-        }
+            <div id="messages"></div>
 
-        .input-area {
-            display: flex;
-            padding: 15px;
-            border-top: 1px solid #ddd;
-            gap: 10px;
-        }
+            <input
+                id="message"
+                type="text"
+                placeholder="Type your question..."
+                onkeydown="if(event.key === 'Enter') sendMessage()"
+            >
 
-        input {
-            flex: 1;
-            padding: 12px;
-            border: 1px solid #ccc;
-            border-radius: 6px;
-            font-size: 15px;
-        }
-
-        button {
-            padding: 12px 20px;
-            background: #2563eb;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-        }
-
-        button:hover {
-            background: #1d4ed8;
-        }
-    </style>
-</head>
-
-<body>
-
-<div class="chat-container">
-
-    <div class="header">
-        <h2>🛒 E-Commerce Support Chatbot</h2>
-        <p>Ask about orders, returns, payments, or refunds</p>
-    </div>
-
-    <div class="chat-box" id="chatBox">
-        <div class="message bot">
-            Hello! How can I help you today?
+            <button onclick="sendMessage()">Send</button>
         </div>
-    </div>
 
-    <div class="input-area">
-        <input
-            type="text"
-            id="userInput"
-            placeholder="Enter your customer message..."
-            onkeydown="if(event.key === 'Enter') sendMessage()"
-        >
+        <script>
+            async function sendMessage() {
+                const input = document.getElementById("message");
+                const message = input.value.trim();
 
-        <button onclick="sendMessage()">Send</button>
-    </div>
+                if (!message) return;
 
-</div>
+                const messages = document.getElementById("messages");
 
-<script>
+                messages.innerHTML +=
+                    `<div class="user"><b>You:</b> ${message}</div>`;
 
-async function sendMessage() {
+                input.value = "";
 
-    const input = document.getElementById("userInput");
-    const chatBox = document.getElementById("chatBox");
+                const response = await fetch("/chat", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        message: message
+                    })
+                });
 
-    const query = input.value.trim();
+                const data = await response.json();
 
-    if (!query) return;
+                messages.innerHTML +=
+                    `<div class="bot">
+                        <b>Bot:</b> ${data.response}<br>
+                        <small>Category: ${data.category}</small>
+                    </div>`;
 
-    // Display user message
-    chatBox.innerHTML += `
-        <div class="message user">
-            <b>You:</b> ${query}
-        </div>
-    `;
+                messages.scrollTop = messages.scrollHeight;
+            }
+        </script>
+    </body>
+    </html>
+    """
 
-    input.value = "";
 
-    // Display loading message
-    chatBox.innerHTML += `
-        <div class="message bot" id="loading">
-            Thinking...
-        </div>
-    `;
+@app.post("/chat")
+def chat(request: ChatRequest):
+    user_message = request.message.strip()
 
-    chatBox.scrollTop = chatBox.scrollHeight;
+    if not user_message:
+        return {
+            "category": "Unknown",
+            "response": "Please enter a message."
+        }
 
-    try {
+    # Convert user query into TF-IDF vector
+    query_vector = vectorizer.transform([user_message])
 
-        const response = await fetch("/chat", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                query: query
-            })
-        });
+    # Calculate similarity with all documents
+    similarities = cosine_similarity(
+        query_vector,
+        document_vectors
+    )[0]
 
-        const data = await response.json();
+    best_index = similarities.argmax()
+    best_score = similarities[best_index]
 
-        document.getElementById("loading").remove();
+    # If similarity is too low, avoid incorrect classification
+    if best_score < 0.15:
+        return {
+            "category": "Unknown",
+            "response":
+                "Sorry, I could not understand your request. "
+                "Please ask about order tracking, product returns, payment failure, or refund status."
+        }
 
-        chatBox.innerHTML += `
-            <div class="message bot">
-                <b>Category:</b> ${data.category}<br><br>
-                <b>Response:</b> ${data.response}<br><br>
-                <small>Similarity Score: ${data.similarity_score}</small>
-            </div>
-        `;
+    category = categories[best_index]
 
-    } catch (error) {
-
-        document.getElementById("loading").innerHTML =
-            "Sorry, something went wrong. Please try again.";
-
+    return {
+        "category": category,
+        "response": responses[category],
+        "similarity_score": round(float(best_score), 3)
     }
-
-    chatBox.scrollTop = chatBox.scrollHeight;
-}
-
-</script>
-
-</body>
-</html>
-"""
